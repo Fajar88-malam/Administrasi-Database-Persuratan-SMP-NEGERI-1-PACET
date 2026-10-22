@@ -1,0 +1,8 @@
+{
+  "name": "E-Surat Sekolah: Sistem Database & Persuratan Administrasi",
+  "description": "Sistem database master dan pembuat surat resmi sekolah otomatis (Surat Tugas, Pengantar, Panggilan & Undangan Orang Tua, Mutasi Masuk/Keluar Siswa) sesuai format tata naskah dinas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
