@@ -15,7 +15,7 @@ import {
 import firebaseConfig from '../../firebase-applet-config.json';
 
 // Reuse existing Firebase app instance if already initialized
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 
 // Desired Google Workspace Scopes

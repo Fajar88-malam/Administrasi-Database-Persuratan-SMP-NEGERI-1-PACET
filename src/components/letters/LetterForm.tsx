@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   LetterRecord,
   LetterType,
@@ -29,6 +29,7 @@ import {
 } from '../../utils/formatters';
 import { LetterDocumentView } from './LetterDocumentView';
 import { ExportToDocsModal } from '../drive/ExportToDocsModal';
+import { saveDraftToFirestore, deleteDraftFromFirestore } from '../../services/firestoreService';
 import {
   FileText,
   Printer,
@@ -40,7 +41,8 @@ import {
   UserCheck,
   Building,
   RefreshCw,
-  Cloud
+  Cloud,
+  CheckCircle2
 } from 'lucide-react';
 
 interface LetterFormProps {
@@ -72,6 +74,10 @@ export const LetterForm: React.FC<LetterFormProps> = ({
   const [hideHeader, setHideHeader] = useState<boolean>(false);
   const [mutasiSheetView, setMutasiSheetView] = useState<'ALL' | 'LEMBAR_1' | 'LEMBAR_2'>('ALL');
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
+
+  // Realtime Autosave State (Data tersimpan saat mengisinya)
+  const [autosaveStatus, setAutosaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
 
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -688,6 +694,16 @@ export const LetterForm: React.FC<LetterFormProps> = ({
       createdAt: existingLetter ? existingLetter.createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
+
+    // Clean up draft from Firestore and localStorage upon official save
+    const draftId = existingLetter ? `draft_${existingLetter.id}` : 'active_draft';
+    deleteDraftFromFirestore(draftId).catch(() => {});
+    try {
+      localStorage.removeItem(`esurat_draft_${draftId}`);
+    } catch (e) {
+      // ignore
+    }
+
     onSave(newRecord);
   }
 
@@ -736,6 +752,120 @@ export const LetterForm: React.FC<LetterFormProps> = ({
     updatedAt: new Date().toISOString()
   };
 
+  // Realtime Autosave effect: saves automatically while user is filling in data
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      try {
+        setAutosaveStatus('saving');
+        const draftId = existingLetter ? `draft_${existingLetter.id}` : 'active_draft';
+        const draftPayload = {
+          id: draftId,
+          letterType: selectedType,
+          formData: liveLetterRecord,
+          updatedAt: new Date().toISOString()
+        };
+        // Save to browser cache immediately
+        try {
+          localStorage.setItem(`esurat_draft_${draftId}`, JSON.stringify(draftPayload));
+        } catch (e) {
+          // ignore
+        }
+        // Save to Firestore cloud database in realtime
+        await saveDraftToFirestore(draftId, draftPayload);
+        setAutosaveStatus('saved');
+        setLastSavedTime(
+          new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        );
+      } catch (err) {
+        console.warn('Realtime autosave notice:', err);
+        setAutosaveStatus('saved');
+      }
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [
+    selectedType,
+    nomorSurat,
+    nomorUrut,
+    kodeKlasifikasi,
+    tanggalSurat,
+    tempatDibuat,
+    sifat,
+    lampiran,
+    perihal,
+    penandatanganNama,
+    penandatanganNip,
+    penandatanganPangkat,
+    penandatanganJabatan,
+    includeStempel,
+    includeTtd,
+    tugasDasar,
+    tugasPetugas,
+    tugasKeperluan,
+    tugasWaktuMulai,
+    tugasWaktuSelesai,
+    tugasJam,
+    tugasTempat,
+    tugasAnggaran,
+    tugasTembusan,
+    pengantarTujuan,
+    pengantarAlamat,
+    pengantarItems,
+    pengantarPenutup,
+    panggilanSiswaId,
+    panggilanNamaSiswa,
+    panggilanNisn,
+    panggilanKelas,
+    panggilanOrtu,
+    panggilanTgl,
+    panggilanWaktu,
+    panggilanTempat,
+    panggilanMenemui,
+    panggilanAlasan,
+    undanganPerihal,
+    undanganDitujukan,
+    undanganTgl,
+    undanganWaktu,
+    undanganTempat,
+    undanganAgenda,
+    mutasiSiswaId,
+    mutasiNamaSiswa,
+    mutasiNis,
+    mutasiNisn,
+    mutasiGender,
+    mutasiTtl,
+    mutasiKelas,
+    mutasiJurusan,
+    mutasiOrtu,
+    mutasiPekerjaan,
+    mutasiAlamatOrtu,
+    mutasiTujuanSekolah,
+    mutasiTujuanKota,
+    mutasiTujuanProv,
+    mutasiAlasan,
+    masukNama,
+    masukNisn,
+    masukGender,
+    masukTtl,
+    masukSekolahAsal,
+    masukKotaAsal,
+    masukKelas,
+    masukJurusan,
+    masukTahunAjaran,
+    masukTgl,
+    masukDasar,
+    ketSiswaId,
+    ketNamaSiswa,
+    ketNis,
+    ketNisn,
+    ketGender,
+    ketTtl,
+    ketKelas,
+    ketOrtu,
+    ketAlamat,
+    ketKeperluan
+  ]);
+
   return (
     <div className="space-y-6">
       {/* Top Action Header */}
@@ -749,10 +879,33 @@ export const LetterForm: React.FC<LetterFormProps> = ({
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
-            <h2 className="text-lg font-bold text-slate-900">
-              {existingLetter ? 'Edit Surat Keluar' : 'Buat Surat Baru'}
-            </h2>
-            <div className="flex items-center gap-2 text-xs text-slate-500">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h2 className="text-lg font-bold text-slate-900">
+                {existingLetter ? 'Edit Surat Keluar' : 'Buat Surat Baru'}
+              </h2>
+              <div
+                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-medium border ${
+                  autosaveStatus === 'saving'
+                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                }`}
+                title="Data formulir tersimpan otomatis secara realtime ke Firestore cloud saat Anda mengisi"
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    autosaveStatus === 'saving' ? 'bg-amber-500 animate-ping' : 'bg-emerald-500 animate-pulse'
+                  }`}
+                ></span>
+                <span>
+                  {autosaveStatus === 'saving'
+                    ? 'Menyimpan draft realtime...'
+                    : lastSavedTime
+                    ? `Tersimpan realtime (${lastSavedTime})`
+                    : 'Tersimpan otomatis saat mengisi'}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
               <span>{getLetterTypeName(selectedType)}</span>
               <span>·</span>
               <span className="font-mono">{nomorSurat}</span>

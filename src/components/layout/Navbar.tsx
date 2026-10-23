@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Menu, Plus, Cloud } from 'lucide-react';
+import { Menu, Plus, Cloud, CheckCircle2, RefreshCw, Wifi, Database } from 'lucide-react';
 import { SchoolProfile } from '../../types';
 import { initAuth } from '../../services/googleAuthService';
 import { User } from 'firebase/auth';
@@ -10,6 +10,8 @@ interface NavbarProps {
   onCreateNewLetter: () => void;
   onToggleSidebarMobile: () => void;
   school: SchoolProfile;
+  cloudSyncState?: 'connected' | 'connecting' | 'syncing' | 'offline';
+  lastSyncTime?: Date | null;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -17,7 +19,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onTabChange,
   onCreateNewLetter,
   onToggleSidebarMobile,
-  school
+  school,
+  cloudSyncState = 'connected',
+  lastSyncTime
 }) => {
   const [googleUser, setGoogleUser] = useState<User | null>(null);
 
@@ -70,8 +74,56 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
       </div>
 
-      {/* Right: Google Workspace connection, School Name & Quick CTA */}
-      <div className="flex items-center gap-2.5">
+      {/* Right: Cloud Realtime Badge, Google Workspace, School Name & CTA */}
+      <div className="flex items-center gap-2 sm:gap-2.5">
+        {/* Realtime Cloud Persistence Status */}
+        <div
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+            cloudSyncState === 'connected'
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : cloudSyncState === 'syncing'
+              ? 'bg-amber-50 text-amber-800 border-amber-200'
+              : cloudSyncState === 'connecting'
+              ? 'bg-blue-50 text-blue-800 border-blue-200'
+              : 'bg-slate-100 text-slate-700 border-slate-200'
+          }`}
+          title={
+            lastSyncTime
+              ? `Sinkronisasi Realtime Aktif. Terakhir diperbarui: ${lastSyncTime.toLocaleTimeString('id-ID')}`
+              : 'Database Terhubung ke Cloud Firestore'
+          }
+        >
+          {cloudSyncState === 'connected' && (
+            <>
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span className="hidden md:inline font-semibold">Realtime Cloud Aktif</span>
+              <span className="md:hidden">Sync</span>
+            </>
+          )}
+          {cloudSyncState === 'syncing' && (
+            <>
+              <RefreshCw className="w-3 h-3 animate-spin text-amber-600" />
+              <span className="hidden md:inline font-semibold">Menyimpan ke Cloud...</span>
+            </>
+          )}
+          {cloudSyncState === 'connecting' && (
+            <>
+              <RefreshCw className="w-3 h-3 animate-spin text-blue-600" />
+              <span className="hidden md:inline font-semibold">Menghubungkan Cloud...</span>
+            </>
+          )}
+          {cloudSyncState === 'offline' && (
+            <>
+              <Database className="w-3 h-3 text-slate-500" />
+              <span className="hidden md:inline font-semibold">Penyimpanan Lokal</span>
+            </>
+          )}
+        </div>
+
+        {/* Google Drive & Docs button */}
         <button
           onClick={() => onTabChange('drive')}
           className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
@@ -87,13 +139,13 @@ export const Navbar: React.FC<NavbarProps> = ({
           </span>
         </button>
 
-        <span className="hidden lg:inline text-xs font-medium text-slate-500">
+        <span className="hidden xl:inline text-xs font-medium text-slate-500 max-w-[200px] truncate">
           {school.namaSekolah}
         </span>
 
         <button
           onClick={onCreateNewLetter}
-          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors shadow-xs shrink-0"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors shadow-xs shrink-0"
         >
           <Plus className="w-3.5 h-3.5" />
           <span>Buat Surat</span>
@@ -102,4 +154,3 @@ export const Navbar: React.FC<NavbarProps> = ({
     </header>
   );
 };
-

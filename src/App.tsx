@@ -18,12 +18,34 @@ import { SchoolProfileSettings } from './components/settings/SchoolProfileSettin
 import { LetterDocumentView } from './components/letters/LetterDocumentView';
 import { GoogleDriveManager } from './components/drive/GoogleDriveManager';
 import { ExportToDocsModal } from './components/drive/ExportToDocsModal';
+import {
+  testConnection,
+  seedInitialDatabaseIfEmpty,
+  subscribeToSchoolProfile,
+  subscribeToStudents,
+  subscribeToTeachers,
+  subscribeToLetters,
+  subscribeToCounter,
+  saveSchoolProfileToFirestore,
+  saveStudentToFirestore,
+  deleteStudentFromFirestore,
+  batchImportStudentsToFirestore,
+  saveTeacherToFirestore,
+  deleteTeacherFromFirestore,
+  batchImportTeachersToFirestore,
+  saveLetterToFirestore,
+  updateLetterStatusInFirestore,
+  deleteLetterFromFirestore,
+  updateCounterInFirestore
+} from './services/firestoreService';
 import { Printer, X, Trash2, Cloud } from 'lucide-react';
 
 export default function App() {
   const [database, setDatabase] = useState<AppDatabase>(() => StorageService.getDatabase());
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isSidebarOpenMobile, setIsSidebarOpenMobile] = useState<boolean>(false);
+  const [cloudSyncState, setCloudSyncState] = useState<'connected' | 'connecting' | 'syncing' | 'offline'>('connecting');
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   
   // Letter Creation / Edit State
   const [editingLetter, setEditingLetter] = useState<LetterRecord | null>(null);
@@ -36,10 +58,101 @@ export default function App() {
   const [modalMutasiSheet, setModalMutasiSheet] = useState<'ALL' | 'LEMBAR_1' | 'LEMBAR_2'>('ALL');
   const [docsModalLetter, setDocsModalLetter] = useState<LetterRecord | null>(null);
 
-  // Sync to localStorage whenever database updates
+  // Sync to localStorage whenever database updates as offline cache
   useEffect(() => {
     StorageService.saveDatabase(database);
   }, [database]);
+
+  // Realtime Cloud Synchronization (Akses di mana saja & update realtime)
+  useEffect(() => {
+    let isMounted = true;
+
+    // Validate connection and seed cloud database if initial empty
+    testConnection().then(async (online) => {
+      if (!isMounted) return;
+      if (online) {
+        setCloudSyncState('connected');
+        try {
+          await seedInitialDatabaseIfEmpty(database);
+        } catch (e) {
+          console.warn('Seeding check notice:', e);
+        }
+      } else {
+        setCloudSyncState('offline');
+      }
+    });
+
+    // Subscriptions to Firestore collections in realtime
+    const unsubProfile = subscribeToSchoolProfile(
+      (profile) => {
+        if (!isMounted || !profile) return;
+        setDatabase(prev => ({ ...prev, schoolProfile: profile }));
+        setCloudSyncState('connected');
+        setLastSyncTime(new Date());
+      },
+      () => setCloudSyncState('offline')
+    );
+
+    const unsubStudents = subscribeToStudents(
+      (students) => {
+        if (!isMounted) return;
+        if (students.length > 0) {
+          setDatabase(prev => ({ ...prev, students }));
+          setCloudSyncState('connected');
+          setLastSyncTime(new Date());
+        }
+      },
+      () => setCloudSyncState('offline')
+    );
+
+    const unsubTeachers = subscribeToTeachers(
+      (teachers) => {
+        if (!isMounted) return;
+        if (teachers.length > 0) {
+          setDatabase(prev => ({ ...prev, teachers }));
+          setCloudSyncState('connected');
+          setLastSyncTime(new Date());
+        }
+      },
+      () => setCloudSyncState('offline')
+    );
+
+    const unsubLetters = subscribeToLetters(
+      (letters) => {
+        if (!isMounted) return;
+        if (letters.length > 0) {
+          setDatabase(prev => ({ ...prev, letters }));
+          setCloudSyncState('connected');
+          setLastSyncTime(new Date());
+        }
+      },
+      () => setCloudSyncState('offline')
+    );
+
+    const unsubCounter = subscribeToCounter(
+      (lastNum) => {
+        if (!isMounted) return;
+        if (typeof lastNum === 'number') {
+          setDatabase(prev => ({
+            ...prev,
+            lastLetterNumber: Math.max(prev.lastLetterNumber, lastNum)
+          }));
+          setCloudSyncState('connected');
+          setLastSyncTime(new Date());
+        }
+      },
+      () => setCloudSyncState('offline')
+    );
+
+    return () => {
+      isMounted = false;
+      unsubProfile();
+      unsubStudents();
+      unsubTeachers();
+      unsubLetters();
+      unsubCounter();
+    };
+  }, []);
 
   // Handlers for Letters
   function handleStartCreateNewLetter(type: LetterType = 'SURAT_TUGAS') {
@@ -54,7 +167,7 @@ export default function App() {
     setActiveTab('create_letter');
   }
 
-  function handleDuplicateLetter(sourceLetter: LetterRecord) {
+  async function handleDuplicateLetter(sourceLetter: LetterRecord) {
     const nextNum = database.lastLetterNumber + 1;
     const newNumberStr = generateNomorSurat(
       sourceLetter.kodeKlasifikasi,
@@ -79,16 +192,34 @@ export default function App() {
       letters: [duplicatedLetter, ...prev.letters],
       lastLetterNumber: nextNum
     }));
+
+    try {
+      setCloudSyncState('syncing');
+      await saveLetterToFirestore(duplicatedLetter);
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to sync duplicated letter to Firestore:', e);
+    }
   }
 
-  function handleDeleteLetter(id: string) {
+  async function handleDeleteLetter(id: string) {
     setDatabase(prev => ({
       ...prev,
       letters: prev.letters.filter(l => l.id !== id)
     }));
+
+    try {
+      setCloudSyncState('syncing');
+      await deleteLetterFromFirestore(id);
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to delete letter from Firestore:', e);
+    }
   }
 
-  function handleSaveLetter(savedLetter: LetterRecord) {
+  async function handleSaveLetter(savedLetter: LetterRecord) {
     setDatabase(prev => {
       const isExisting = prev.letters.some(l => l.id === savedLetter.id);
       let updatedLetters: LetterRecord[];
@@ -112,13 +243,31 @@ export default function App() {
 
     setActiveTab('letters');
     setEditingLetter(null);
+
+    try {
+      setCloudSyncState('syncing');
+      await saveLetterToFirestore(savedLetter);
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to save letter to Firestore:', e);
+    }
   }
 
-  function handleLetterStatusChange(id: string, newStatus: LetterRecord['status']) {
+  async function handleLetterStatusChange(id: string, newStatus: LetterRecord['status']) {
     setDatabase(prev => ({
       ...prev,
       letters: prev.letters.map(l => (l.id === id ? { ...l, status: newStatus } : l))
     }));
+
+    try {
+      setCloudSyncState('syncing');
+      await updateLetterStatusInFirestore(id, newStatus);
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to update letter status in Firestore:', e);
+    }
   }
 
   // Quick Action from Student Database
@@ -280,73 +429,159 @@ export default function App() {
   }
 
   // Student CRUD
-  function handleAddStudent(newStudent: Student) {
+  async function handleAddStudent(newStudent: Student) {
     setDatabase(prev => ({
       ...prev,
       students: [newStudent, ...prev.students]
     }));
+    try {
+      setCloudSyncState('syncing');
+      await saveStudentToFirestore(newStudent);
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to add student to Firestore:', e);
+    }
   }
 
-  function handleUpdateStudent(updatedStudent: Student) {
+  async function handleUpdateStudent(updatedStudent: Student) {
     setDatabase(prev => ({
       ...prev,
       students: prev.students.map(s => (s.id === updatedStudent.id ? updatedStudent : s))
     }));
+    try {
+      setCloudSyncState('syncing');
+      await saveStudentToFirestore(updatedStudent);
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to update student in Firestore:', e);
+    }
   }
 
-  function handleDeleteStudent(id: string) {
+  async function handleDeleteStudent(id: string) {
     setDatabase(prev => ({
       ...prev,
       students: prev.students.filter(s => s.id !== id)
     }));
+    try {
+      setCloudSyncState('syncing');
+      await deleteStudentFromFirestore(id);
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to delete student from Firestore:', e);
+    }
   }
 
-  function handleBatchImportStudents(imported: Student[], replace: boolean) {
+  async function handleBatchImportStudents(imported: Student[], replace: boolean) {
     setDatabase(prev => ({
       ...prev,
       students: replace ? imported : [...imported, ...prev.students]
     }));
+    try {
+      setCloudSyncState('syncing');
+      await batchImportStudentsToFirestore(imported, replace);
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to batch import students to Firestore:', e);
+    }
   }
 
   // Teacher CRUD
-  function handleAddTeacher(newTeacher: Teacher) {
+  async function handleAddTeacher(newTeacher: Teacher) {
     setDatabase(prev => ({
       ...prev,
       teachers: [newTeacher, ...prev.teachers]
     }));
+    try {
+      setCloudSyncState('syncing');
+      await saveTeacherToFirestore(newTeacher);
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to add teacher to Firestore:', e);
+    }
   }
 
-  function handleUpdateTeacher(updatedTeacher: Teacher) {
+  async function handleUpdateTeacher(updatedTeacher: Teacher) {
     setDatabase(prev => ({
       ...prev,
       teachers: prev.teachers.map(t => (t.id === updatedTeacher.id ? updatedTeacher : t))
     }));
+    try {
+      setCloudSyncState('syncing');
+      await saveTeacherToFirestore(updatedTeacher);
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to update teacher in Firestore:', e);
+    }
   }
 
-  function handleDeleteTeacher(id: string) {
+  async function handleDeleteTeacher(id: string) {
     setDatabase(prev => ({
       ...prev,
       teachers: prev.teachers.filter(t => t.id !== id)
     }));
+    try {
+      setCloudSyncState('syncing');
+      await deleteTeacherFromFirestore(id);
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to delete teacher from Firestore:', e);
+    }
   }
 
-  function handleBatchImportTeachers(imported: Teacher[], replace: boolean) {
+  async function handleBatchImportTeachers(imported: Teacher[], replace: boolean) {
     setDatabase(prev => ({
       ...prev,
       teachers: replace ? imported : [...imported, ...prev.teachers]
     }));
+    try {
+      setCloudSyncState('syncing');
+      await batchImportTeachersToFirestore(imported, replace);
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to batch import teachers to Firestore:', e);
+    }
   }
 
   // School Profile & Database Reset
-  function handleSaveProfile(newProfile: SchoolProfile) {
+  async function handleSaveProfile(newProfile: SchoolProfile) {
     setDatabase(prev => ({
       ...prev,
       schoolProfile: newProfile
     }));
+    try {
+      setCloudSyncState('syncing');
+      await saveSchoolProfileToFirestore(newProfile);
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to save profile to Firestore:', e);
+    }
   }
 
-  function handleDatabaseRestored(restoredDb: AppDatabase) {
+  async function handleDatabaseRestored(restoredDb: AppDatabase) {
     setDatabase(restoredDb);
+    try {
+      setCloudSyncState('syncing');
+      await saveSchoolProfileToFirestore(restoredDb.schoolProfile);
+      await updateCounterInFirestore(restoredDb.lastLetterNumber);
+      await batchImportStudentsToFirestore(restoredDb.students, true);
+      await batchImportTeachersToFirestore(restoredDb.teachers, true);
+      for (const letter of restoredDb.letters) {
+        await saveLetterToFirestore(letter);
+      }
+      setCloudSyncState('connected');
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.error('Failed to restore database to Firestore:', e);
+    }
   }
 
   return (
@@ -376,6 +611,8 @@ export default function App() {
           onCreateNewLetter={() => handleStartCreateNewLetter('SURAT_TUGAS')}
           onToggleSidebarMobile={() => setIsSidebarOpenMobile(prev => !prev)}
           school={database.schoolProfile}
+          cloudSyncState={cloudSyncState}
+          lastSyncTime={lastSyncTime}
         />
 
         {/* Main Workspace Viewport */}
